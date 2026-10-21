@@ -1,0 +1,103 @@
+[
+  {},
+  {
+    "title": "最初の足場",
+    "task": "現在地を確認し、/home/contractor の受信メッセージにある接続確認コードを答えてくれ。",
+    "guide": "pwd: 現在地 / ls: 一覧 / cd: 移動 / cat: 内容を読む。相対パスは現在地が基準。",
+    "hints": [
+      "まずホームの一覧を調べよう。",
+      "cat で README.txt を読もう。",
+      "cat /home/contractor/inbox/first-contact.txt\nmission check"
+    ]
+  },
+  {
+    "title": "消された連絡先",
+    "task": "Aokiが /home/contractor に隠した連絡ファイルを探し、合言葉を答えてくれ。",
+    "guide": "ls -la: 隠しファイルと詳細を表示 / cd ~: ホームへ移動。絶対パスは / から始まる。",
+    "hints": [
+      "通常の一覧に出ない名前がある。",
+      "名前が . で始まるファイルは隠しファイル。",
+      "cd ~\nls -la\ncat .contact\nmission check"
+    ]
+  },
+  {
+    "title": "消えた技術者",
+    "task": "社員データ /srv/nightfall/staff から aoki の handover.txt を探し、プロジェクト名を答えてくれ。",
+    "guide": "find: 指定した範囲でファイル名などを検索する。",
+    "hints": [
+      "ファイル名は handover.txt と分かっている。",
+      "find の -name を調べよう。結果のパスに aoki があるか確認。",
+      "find /srv/nightfall/staff -type f -name handover.txt\ncat /srv/nightfall/staff/engineering/retired/aoki/handover.txt\nmission check"
+    ]
+  },
+  {
+    "title": "深夜のアクセス",
+    "task": "ログ /srv/nightfall/logs/access.log から Aoki・GLASS・成功した移送の行を探し、バックアップファイル名を答えてくれ。",
+    "guide": "head / tail: 先頭・末尾 / less: 長文を読む（qで終了）/ grep: 内容を検索 / |: 出力を次へ渡す。",
+    "hints": [
+      "人名、プロジェクト名、成功した行で絞ろう。",
+      "grep の出力を | で別の grep へ渡せる。",
+      "head -n 5 /srv/nightfall/logs/access.log\ngrep 'user=aoki ' /srv/nightfall/logs/access.log | grep 'project=GLASS ' | grep 'status=OK'\nmission check\n補助: tail -n 10 /srv/nightfall/logs/access.log"
+    ]
+  },
+  {
+    "title": "認証情報の置き土産",
+    "task": "バックアップ /srv/nightfall/backups/glass-maintenance.tar.gz を作業用フォルダに展開し、保管庫のパスワードを見つけてくれ。認証は vault unlock archive。",
+    "guide": "mkdir: フォルダ作成 / tar -tzf: 一覧 / tar -xzf: 展開 / -C: 展開先の指定。",
+    "hints": [
+      "まずアーカイブの中身を確認しよう。",
+      "tar -tzf で一覧、tar -xzf で展開。-C の後に展開先を書く。",
+      "mkdir -p ~/work/backup\ntar -tzf /srv/nightfall/backups/glass-maintenance.tar.gz\ntar -xzf /srv/nightfall/backups/glass-maintenance.tar.gz -C ~/work/backup\ncat ~/work/backup/maintenance/README.txt\ncat ~/work/backup/maintenance/config/archive.env\nvault unlock archive"
+    ]
+  },
+  {
+    "title": "偽装された記録",
+    "task": "報告書 /srv/nightfall/vault/reports/before.txt と after.txt を比較し、改ざん案件のIDを答えてくれ。",
+    "guide": "diff -u: 変更前後の差分。差分があると終了コード1になるが、比較は成功している。",
+    "hints": [
+      "同じ案件の値が変わっている。",
+      "diff -u で削除行と追加行を比べよう。",
+      "diff -u /srv/nightfall/vault/reports/before.txt /srv/nightfall/vault/reports/after.txt\nmission check"
+    ]
+  },
+  {
+    "title": "中継先を割り出せ",
+    "task": "通信先 /srv/nightfall/vault/net/transfer-destinations.log を集計し、もっとも頻繁なホストを答えてくれ。",
+    "guide": "wc -l: 行数 / sort: 並べ替え / uniq -c: 隣接する同じ行を数える / sort -nr: 数値の降順。",
+    "hints": [
+      "同じ宛先が何回あるか数えよう。",
+      "uniq -c は隣接した同じ行を数えるため、先に sort する。",
+      "wc -l /srv/nightfall/vault/net/transfer-destinations.log\nsort /srv/nightfall/vault/net/transfer-destinations.log | uniq -c | sort -nr\nmission check"
+    ]
+  },
+  {
+    "title": "証拠回収ツールの修復",
+    "task": "~/recovery/recovery.conf の TARGET を修正し、recover.sh を実行してくれ。OUTPUTは変更しない。",
+    "guide": "nano: 編集（Ctrl+O、Enterで保存、Ctrl+Xで終了）/ ls -l: 権限表示 / chmod u+x: 所有者の実行権限 / ./名前: 起動。",
+    "hints": [
+      "接続先と実行権限の両方を確認しよう。",
+      "nano は Ctrl+O → Enter で保存、Ctrl+Xで終了。chmod u+x で実行できる。",
+      "cd ~/recovery\nnano recovery.conf\n# TARGET=relay-07 に変更（OUTPUTはそのまま）\nchmod u+x recover.sh\n./recover.sh\nmission check"
+    ]
+  },
+  {
+    "title": "持ち出す証拠をまとめろ",
+    "task": "~/recovery/output の4証拠を ~/staging に整理して ~/submission/evidence.tar.gz に梱包してくれ。~/transfer-cache の一時ファイルと old は削除してよい。",
+    "guide": "mkdir / cp / mv / touch: 作成・コピー・移動 / >: 上書き / >>: 追記 / rm / rmdir: 削除 / du: 容量 / tar -czf: 圧縮。\n必要: access.txt, changes.txt, destinations.txt, receipt.txt, manifest.txt, report.txt, 空のREADY。manifestは4証拠名を1行ずつ。reportは CASE=NF-204 と TARGET=relay-07 の2行。キャッシュとアーカイブの合計は1 MiB以下。",
+    "hints": [
+      "4証拠をコピーし、削除してよいキャッシュを整理しよう。元の証拠は残す。",
+      "> は上書き、>> は追記。tar -C で梱包の基準場所を指定できる。",
+      "mkdir -p ~/staging\ncp ~/recovery/output/access-evidence.txt ~/staging/\nmv ~/staging/access-evidence.txt ~/staging/access.txt\ncp ~/recovery/output/report-diff.txt ~/staging/changes.txt\ncp ~/recovery/output/destination-counts.txt ~/staging/destinations.txt\ncp ~/recovery/output/relay-receipt.txt ~/staging/receipt.txt\nprintf '%s\\n' access.txt changes.txt destinations.txt receipt.txt > ~/staging/manifest.txt\necho 'CASE=NF-204' > ~/staging/report.txt\necho 'TARGET=relay-07' >> ~/staging/report.txt\ntouch ~/staging/READY\ndu -sh ~/transfer-cache\nrm ~/transfer-cache/*.tmp\nrmdir ~/transfer-cache/old\ntar -czf ~/submission/evidence.tar.gz -C ~ staging\nmission check"
+    ]
+  },
+  {
+    "title": "最後の扉",
+    "task": "~/recovery/output/relay-receipt.txt から最終鍵を探し vault unlock core で認証。/srv/nightfall/core/directive.txt の案件を確かめ、証拠に追加して mission submit してくれ。",
+    "guide": "",
+    "hints": [
+      "回収成功時の受領記録を読もう。",
+      "鍵の保存先には隠しディレクトリがある。指示書もmanifestに追加する。",
+      "cat ~/recovery/output/relay-receipt.txt\nls -la ~/recovery/output/.keys\ncat ~/recovery/output/.keys/final.key\nvault unlock core\ncat /srv/nightfall/core/directive.txt\ncp /srv/nightfall/core/directive.txt ~/staging/directive.txt\necho directive.txt >> ~/staging/manifest.txt\ntar -czf ~/submission/evidence.tar.gz -C ~ staging\nmission submit"
+    ]
+  }
+]
