@@ -12,23 +12,27 @@ from .engine import Engine
 def practice(engine, stage):
     if engine.state['cleared'] or engine.state['stage'] != 1:
         raise ValueError('練習の初期化には未使用の環境を使ってください。')
-    for n in range(2, stage + 1):
-        if n == 9:
-            engine.state['pending'] = {'kind': 'collect'}
-            engine.save()
-            engine.resume()
-            engine.fs.write('home/contractor/recovery/recovery.conf', 'TARGET=relay-07\nOUTPUT=/home/contractor/recovery/output\n')
-            engine.fs.write('home/contractor/recovery/recover.sh', c.RECOVER, 0o744)
-        if n == 10:
-            engine.fs.remove('home/contractor/transfer-cache/old')
+    if type(stage) is not int or not 1 <= stage <= 10:
+        raise ValueError('保存地点は1〜10で指定してください。')
+    # Canonical investigation order; normal play may retrieve records in another order.
+    actions = [('record', 'NOAH-R7'), ('record', 'BKP-0210'), ('archive', None),
+               ('record', 'MAIL-0216'), ('record', 'TERM-E5-03'),
+               ('record', 'D-204'), ('record', 'LIAISON-04'),
+               ('collect', None), ('decoy', None)]
+    for kind, ref in actions[:stage - 1]:
+        if kind == 'collect':
+            engine.fs.write(c.HOME + '/recovery/recovery.conf',
+                            'TARGET=liaison-04\nOUTPUT=/home/contractor/recovery/output\n')
+            engine.fs.write(c.HOME + '/recovery/recover.sh', c.RECOVER, 0o744)
+        if kind == 'decoy':
+            engine.fs.remove(c.HOME + '/transfer-cache/old')
             for name in ['part-1.tmp', 'part-2.tmp']:
-                engine.fs.remove('home/contractor/transfer-cache/' + name)
-            files = {'staging/' + name: body for name, body in c.EVIDENCE.items()}
-            files.update({'staging/manifest.txt': '\n'.join(c.EVIDENCE) + '\n', 'staging/report.txt': c.REPORT, 'staging/READY': b''})
-            for name, body in files.items():
-                engine.fs.write('home/contractor/' + name, body)
-            engine.fs.write('home/contractor/submission/evidence.tar.gz', c.archive(files))
-        engine.transition(n)
+                engine.fs.remove(c.HOME + '/transfer-cache/' + name)
+            engine.fs.write(c.HOME + '/staging/plan.txt', c.PLAN)
+            engine.fs.write(c.HOME + '/staging/READY', b'')
+            engine.fs.write(c.HOME + '/submission/decoy.tar.gz',
+                            c.archive({'staging/plan.txt': c.PLAN, 'staging/READY': b''}))
+        engine.action(kind, **({'ref': ref} if ref else {}))
 
 
 def main():

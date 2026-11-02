@@ -1,6 +1,8 @@
-# NIGHTFALL：消去までの120分
+# NIGHTFALL：ノアの亡命
 
-Windows 11＋Ubuntu 24.04 LTS（WSL 2）で遊ぶUnix CLI学習ゲームです。実際のBashで探索・検索・編集・集計・証拠の梱包を行います。Dockerは使いません。
+Windows 11＋Ubuntu 24.04 LTS（WSL 2）で遊ぶUnix CLI学習ゲームです。実際のBashで記録を探索し、矛盾を照合しながら、亡命に必要な機密情報を奪取します。任務の解説や正体の答え合わせは表示せず、私信・台帳・通信履歴から物語を読み取る構成です。
+
+最初は `mission` で接続先を確認し、`~/inbox/request.txt` を読んでください。資料中の参照番号は `mission fetch 参照番号` で照会できます。操作説明は `mission help`、必要な場合だけ `mission hint` を使います。Dockerは使いません。
 
 現在はゲーム本体と配布用スクリプトを実装した段階です。Linux上の自動検証は実施済みですが、**WSL実機でのビルド・配布・通しプレイは未検証で、配布用rootfsも未生成**です。参加者への配布前に[Windows確認表](docs/windows-validation.md)を実施してください。
 
@@ -19,6 +21,8 @@ bash -n scripts/provision.sh scripts/player-shell.sh scripts/bashrc
 ```
 
 テストは一時ディレクトリに仮のホームと管理領域を作り、ホストの実際の `/home/contractor` や `/srv/nightfall` を変更しません。通信テストではローカルのUnixドメインソケットと疑似端末を使用します。ソケットが禁止されたサンドボックス内では、許可された環境で通信テストを実行してください。pytestがある場合は `python3 -m pytest tests` でも実行できます。
+
+シナリオ版は2です。旧版の保存データは自動変換せず、既存進捗を保護して停止します。新しい配布環境で開始してください。
 
 ## 配布物
 

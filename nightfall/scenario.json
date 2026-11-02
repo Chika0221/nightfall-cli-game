@@ -1,103 +1,73 @@
 [
   {},
   {
-    "title": "最初の足場",
-    "task": "現在地を確認し、/home/contractor の受信メッセージにある接続確認コードを答えてくれ。",
-    "guide": "pwd: 現在地 / ls: 一覧 / cd: 移動 / cat: 内容を読む。相対パスは現在地が基準。",
     "hints": [
-      "まずホームの一覧を調べよう。",
-      "cat で README.txt を読もう。",
-      "cat /home/contractor/inbox/first-contact.txt\nmission check"
+      "依頼文の身分証番号を、公開台帳で検索できる。広報資料にも研究の参照先がある。",
+      "grep -R で N-000 と ノア を公開領域から探そう。三施設の記録と研究原簿を比べられる。",
+      "cat ~/inbox/request.txt\ngrep -R 'N-000' /srv/nightfall/public\ncat /srv/nightfall/public/bulletins/noah.txt\nmission fetch NOAH-R7"
     ]
   },
   {
-    "title": "消された連絡先",
-    "task": "Aokiが /home/contractor に隠した連絡ファイルを探し、合言葉を答えてくれ。",
-    "guide": "ls -la: 隠しファイルと詳細を表示 / cd ~: ホームへ移動。絶対パスは / から始まる。",
     "hints": [
-      "通常の一覧に出ない名前がある。",
-      "名前が . で始まるファイルは隠しファイル。",
-      "cd ~\nls -la\ncat .contact\nmission check"
+      "保守資料は公開台帳とは別の領域にある。",
+      "保守バックアップの一覧、または研究承認記録に参照番号がある。",
+      "cat /srv/nightfall/maintenance/backup-index.tsv\nmission fetch BKP-0210\nmkdir -p ~/work/backup\ntar -tzf /srv/nightfall/backups/night-maintenance.tar.gz\ntar -xzf /srv/nightfall/backups/night-maintenance.tar.gz -C ~/work/backup"
     ]
   },
   {
-    "title": "消えた技術者",
-    "task": "社員データ /srv/nightfall/staff から aoki の handover.txt を探し、プロジェクト名を答えてくれ。",
-    "guide": "find: 指定した範囲でファイル名などを検索する。",
     "hints": [
-      "ファイル名は handover.txt と分かっている。",
-      "find の -name を調べよう。結果のパスに aoki があるか確認。",
-      "find /srv/nightfall/staff -type f -name handover.txt\ncat /srv/nightfall/staff/engineering/retired/aoki/handover.txt\nmission check"
+      "バックアップの保守設定に、保管庫の接続情報が残っている。",
+      "展開先の maintenance/config/archive.env を読もう。",
+      "cat ~/work/backup/maintenance/config/archive.env\nvault unlock archive\n# パスワード: cinder-47"
     ]
   },
   {
-    "title": "深夜のアクセス",
-    "task": "ログ /srv/nightfall/logs/access.log から Aoki・GLASS・成功した移送の行を探し、バックアップファイル名を答えてくれ。",
-    "guide": "head / tail: 先頭・末尾 / less: 長文を読む（qで終了）/ grep: 内容を検索 / |: 出力を次へ渡す。",
     "hints": [
-      "人名、プロジェクト名、成功した行で絞ろう。",
-      "grep の出力を | で別の grep へ渡せる。",
-      "head -n 5 /srv/nightfall/logs/access.log\ngrep 'user=aoki ' /srv/nightfall/logs/access.log | grep 'project=GLASS ' | grep 'status=OK'\nmission check\n補助: tail -n 10 /srv/nightfall/logs/access.log"
+      "バックアップには、認証情報以外の参照先もある。",
+      "展開先の maintenance/README.txt に通信キャッシュの参照番号がある。",
+      "cat ~/work/backup/maintenance/README.txt\nmission fetch MAIL-0216\ncat /srv/nightfall/records/mail/0216.txt\ncat /srv/nightfall/vault/reports/after.txt"
     ]
   },
   {
-    "title": "認証情報の置き土産",
-    "task": "バックアップ /srv/nightfall/backups/glass-maintenance.tar.gz を作業用フォルダに展開し、保管庫のパスワードを見つけてくれ。認証は vault unlock archive。",
-    "guide": "mkdir: フォルダ作成 / tar -tzf: 一覧 / tar -xzf: 展開 / -C: 展開先の指定。",
     "hints": [
-      "まずアーカイブの中身を確認しよう。",
-      "tar -tzf で一覧、tar -xzf で展開。-C の後に展開先を書く。",
-      "mkdir -p ~/work/backup\ntar -tzf /srv/nightfall/backups/glass-maintenance.tar.gz\ntar -xzf /srv/nightfall/backups/glass-maintenance.tar.gz -C ~/work/backup\ncat ~/work/backup/maintenance/README.txt\ncat ~/work/backup/maintenance/config/archive.env\nvault unlock archive"
+      "配置命令の二つの版を比較すると、伏せられた項目が分かる。",
+      "差分で見つけた端末番号を、通信履歴と端末原簿で照合できる。照会形式は sessions.log の末尾にある。",
+      "diff -u /srv/nightfall/vault/reports/before.txt /srv/nightfall/vault/reports/after.txt\ncat /srv/nightfall/vault/net/sessions.log\nmission fetch TERM-E5-03\ncat /srv/nightfall/records/terminals/E5-03.txt"
     ]
   },
   {
-    "title": "偽装された記録",
-    "task": "報告書 /srv/nightfall/vault/reports/before.txt と after.txt を比較し、改ざん案件のIDを答えてくれ。",
-    "guide": "diff -u: 変更前後の差分。差分があると終了コード1になるが、比較は成功している。",
     "hints": [
-      "同じ案件の値が変わっている。",
-      "diff -u で削除行と追加行を比べよう。",
-      "diff -u /srv/nightfall/vault/reports/before.txt /srv/nightfall/vault/reports/after.txt\nmission check"
+      "研究関係者の備考には、扶養家族への参照がある。",
+      "records/research/notes.txt の管理番号を照会しよう。",
+      "cat /srv/nightfall/records/research/notes.txt\nmission fetch D-204\ncat /srv/nightfall/records/dependents/D-204.txt\ncat /srv/nightfall/records/dependents/requests.txt"
     ]
   },
   {
-    "title": "中継先を割り出せ",
-    "task": "通信先 /srv/nightfall/vault/net/transfer-destinations.log を集計し、もっとも頻繁なホストを答えてくれ。",
-    "guide": "wc -l: 行数 / sort: 並べ替え / uniq -c: 隣接する同じ行を数える / sort -nr: 数値の降順。",
     "hints": [
-      "同じ宛先が何回あるか数えよう。",
-      "uniq -c は隣接した同じ行を数えるため、先に sort する。",
-      "wc -l /srv/nightfall/vault/net/transfer-destinations.log\nsort /srv/nightfall/vault/net/transfer-destinations.log | uniq -c | sort -nr\nmission check"
+      "通信先の一覧を集計すると、頻繁に使われている宛先が分かる。",
+      "sort のあとに uniq -c、さらに sort -nr。ホスト原簿の照会形式は sessions.log にある。",
+      "sort /srv/nightfall/vault/net/destinations.log | uniq -c | sort -nr\nmission fetch LIAISON-04\ncat /srv/nightfall/records/network/liaison-04.txt"
     ]
   },
   {
-    "title": "証拠回収ツールの修復",
-    "task": "~/recovery/recovery.conf の TARGET を修正し、recover.sh を実行してくれ。OUTPUTは変更しない。",
-    "guide": "nano: 編集（Ctrl+O、Enterで保存、Ctrl+Xで終了）/ ls -l: 権限表示 / chmod u+x: 所有者の実行権限 / ./名前: 起動。",
     "hints": [
-      "接続先と実行権限の両方を確認しよう。",
-      "nano は Ctrl+O → Enter で保存、Ctrl+Xで終了。chmod u+x で実行できる。",
-      "cd ~/recovery\nnano recovery.conf\n# TARGET=relay-07 に変更（OUTPUTはそのまま）\nchmod u+x recover.sh\n./recover.sh\nmission check"
+      "回収ツールは、設定と実行権限の両方を確認する。",
+      "recovery.conf の TARGET を通信先に合わせ、recover.sh に所有者の実行権限を付ける。",
+      "cd ~/recovery\nnano recovery.conf\n# TARGET=liaison-04、OUTPUTは変更しない\nchmod u+x recover.sh\n./recover.sh\ncat output/orders.txt\ncat ~/inbox/ren.txt"
     ]
   },
   {
-    "title": "持ち出す証拠をまとめろ",
-    "task": "~/recovery/output の4証拠を ~/staging に整理して ~/submission/evidence.tar.gz に梱包してくれ。~/transfer-cache の一時ファイルと old は削除してよい。",
-    "guide": "mkdir / cp / mv / touch: 作成・コピー・移動 / >: 上書き / >>: 追記 / rm / rmdir: 削除 / du: 容量 / tar -czf: 圧縮。\n必要: access.txt, changes.txt, destinations.txt, receipt.txt, manifest.txt, report.txt, 空のREADY。manifestは4証拠名を1行ずつ。reportは CASE=NF-204 と TARGET=relay-07 の2行。キャッシュとアーカイブの合計は1 MiB以下。",
     "hints": [
-      "4証拠をコピーし、削除してよいキャッシュを整理しよう。元の証拠は残す。",
-      "> は上書き、>> は追記。tar -C で梱包の基準場所を指定できる。",
-      "mkdir -p ~/staging\ncp ~/recovery/output/access-evidence.txt ~/staging/\nmv ~/staging/access-evidence.txt ~/staging/access.txt\ncp ~/recovery/output/report-diff.txt ~/staging/changes.txt\ncp ~/recovery/output/destination-counts.txt ~/staging/destinations.txt\ncp ~/recovery/output/relay-receipt.txt ~/staging/receipt.txt\nprintf '%s\\n' access.txt changes.txt destinations.txt receipt.txt > ~/staging/manifest.txt\necho 'CASE=NF-204' > ~/staging/report.txt\necho 'TARGET=relay-07' >> ~/staging/report.txt\ntouch ~/staging/READY\ndu -sh ~/transfer-cache\nrm ~/transfer-cache/*.tmp\nrmdir ~/transfer-cache/old\ntar -czf ~/submission/evidence.tar.gz -C ~ staging\nmission check"
+      "協力者回線の送信形式、警備配置、保守車両の経路を照合しよう。指令書の移送先も施設一覧で調べられる。",
+      "西側の予備隊を東へ動かす報告を作る。plan.txt に内部資料は添付しない。削除可能なキャッシュも整理する。",
+      "cat /srv/nightfall/vault/liaison/protocol.txt\ncat /srv/nightfall/vault/transport/patrols.tsv\nprintf '%s\\n' SOURCE=C-17 MEETING_POINT=EAST-4 MEETING_TIME=03:10 > ~/staging/plan.txt\ntouch ~/staging/READY\nrm ~/transfer-cache/*.tmp\nrmdir ~/transfer-cache/old\ntar -czf ~/submission/decoy.tar.gz -C ~ staging\nmission check\n# stagingに他のファイルがある場合は別の作業フォルダへ移してから梱包"
     ]
   },
   {
-    "title": "最後の扉",
-    "task": "~/recovery/output/relay-receipt.txt から最終鍵を探し vault unlock core で認証。/srv/nightfall/core/directive.txt の案件を確かめ、証拠に追加して mission submit してくれ。",
-    "guide": "",
     "hints": [
-      "回収成功時の受領記録を読もう。",
-      "鍵の保存先には隠しディレクトリがある。指示書もmanifestに追加する。",
-      "cat ~/recovery/output/relay-receipt.txt\nls -la ~/recovery/output/.keys\ncat ~/recovery/output/.keys/final.key\nvault unlock core\ncat /srv/nightfall/core/directive.txt\ncp /srv/nightfall/core/directive.txt ~/staging/directive.txt\necho directive.txt >> ~/staging/manifest.txt\ntar -czf ~/submission/evidence.tar.gz -C ~ staging\nmission submit"
+      "送信受領票から、現行の移送命令へアクセスできる。最終送信の仕様は保守領域にある。",
+      "receipt.txt が示す隠しディレクトリの鍵で core を認証。ホームの隠し連絡先、原簿の署名順、車両台帳を照合する。",
+      "cat ~/recovery/output/receipt.txt\nls -la ~/recovery/output/.keys\ncat ~/recovery/output/.keys/final.key\nvault unlock core\n# パスワード: west-0326\ncat /srv/nightfall/core/directive.txt\ncat ~/.contact\ncat /srv/nightfall/maintenance/transport-format.txt\n# 未取得なら mission fetch NOAH-R7 / MAIL-0216 / TERM-E5-03 / D-204\nmkdir -p ~/staging\nrm ~/staging/plan.txt\ncp /srv/nightfall/records/mail/0216.txt ~/staging/meeting.txt\ncp /srv/nightfall/records/terminals/E5-03.txt ~/staging/assignment.txt\ncp /srv/nightfall/records/dependents/D-204.txt ~/staging/dependent.txt\ncp ~/recovery/output/orders.txt ~/staging/orders.txt\ncp /srv/nightfall/core/directive.txt ~/staging/directive.txt\nprintf '%s\\n' meeting.txt assignment.txt dependent.txt orders.txt directive.txt > ~/staging/manifest.txt\nprintf '%s\\n' VEHICLE=MX-5 GATE=WEST-2 DEPARTURE=03:26 PASSENGERS=R-12,R-31,R-08,D-204 > ~/staging/report.txt\ntouch ~/staging/READY\ntar -czf ~/submission/evidence.tar.gz -C ~ staging\nmission submit"
     ]
   }
 ]
