@@ -2,10 +2,8 @@ import io
 import json
 import os
 from pathlib import Path
-import shutil
-import stat
+import sqlite3
 import subprocess
-import sys
 import tarfile
 import tempfile
 import unittest
@@ -14,7 +12,6 @@ from unittest import mock
 from nightfall import content as c
 from nightfall.admin import practice
 from nightfall.engine import Engine, Incomplete, MIB
-from nightfall.fs import UnsafePath
 
 
 class GameTest(unittest.TestCase):
@@ -42,240 +39,325 @@ class GameTest(unittest.TestCase):
     def to(self, stage):
         practice(self.game, stage)
 
-    def submit_files(self, final=False, **changes):
-        files = {'staging/' + name: value for name, value in c.EVIDENCE.items()}
-        if final:
-            files['staging/directive.txt'] = c.DIRECTIVE.encode()
-        names = [p.removeprefix('staging/') for p in files]
-        files.update({'staging/manifest.txt': '\n'.join(names) + '\n', 'staging/report.txt': c.REPORT, 'staging/READY': b''})
+    def clean_cache(self):
+        self.game.fs.remove(c.HOME + '/transfer-cache/old')
+        for name in ('part-1.tmp', 'part-2.tmp'):
+            self.game.fs.remove(c.HOME + '/transfer-cache/' + name)
+
+    def decoy(self, **changes):
+        files = {'staging/plan.txt': c.PLAN, 'staging/READY': b''}
         files.update(changes)
-        self.game.fs.write('home/contractor/submission/evidence.tar.gz', c.archive(files))
+        self.game.fs.write(c.HOME + '/submission/decoy.tar.gz', c.archive(files))
+
+    def submit_files(self, **changes):
+        evidence = dict(c.EVIDENCE, **{'directive.txt': c.DIRECTIVE.encode()})
+        files = {'staging/' + name: body for name, body in evidence.items()}
+        files.update({'staging/manifest.txt': '\n'.join(evidence) + '\n',
+                      'staging/report.txt': c.REPORT, 'staging/READY': b''})
+        files.update(changes)
+        self.game.fs.write(c.HOME + '/submission/evidence.tar.gz', c.archive(files))
         return files
 
-    def clean_cache(self):
-        self.game.fs.remove('home/contractor/transfer-cache/old')
-        for name in ('part-1.tmp', 'part-2.tmp'):
-            self.game.fs.remove('home/contractor/transfer-cache/' + name)
+    def restart(self):
+        self.game.close()
+        self.game = Engine(self.root, self.private)
 
-    def test_full_game_with_real_unix_packaging_and_restart(self):
-        self.assertFalse(self.game.fs.exists('home/contractor/.contact'))
-        self.assertIn('現在地', self.send('current'))
-        self.fail('unlock', area='core', answer='ember-204')
-        self.fail('check', answer='GLASS')
-        self.send('check', answer=' foothold\n')
-        self.assertTrue(self.game.fs.exists('home/contractor/.contact'))
-        self.send('check', answer='nightjar')
-        self.send('check', answer='GLASS')
-        log = self.game.fs.read('srv/nightfall/logs/access.log').decode()
-        matches = [line for line in log.splitlines() if 'user=aoki ' in line and 'project=GLASS ' in line and 'status=OK' in line]
-        self.assertEqual(matches, [c.ACCESS_LINE.strip()])
-        self.assertEqual(len(log.splitlines()), 3000)
-        self.send('check', answer='/srv/nightfall/backups/glass-maintenance.tar.gz')
-        self.fail('unlock', area='archive', answer='CINDER-47')
-        self.send('unlock', area='archive', answer='cinder-47')
-        self.send('unlock', area='archive', answer='irrelevant')
-        self.send('check', answer='NF-204')
-        self.send('check', answer='relay-07')
+    def shell(self, script):
+        return subprocess.run(['bash', '-eu', '-c', script, 'playtest', str(self.root)],
+                              cwd=self.root / c.HOME, text=True, capture_output=True, check=True)
+
+    def test_full_investigation_with_real_unix_tools_and_restart(self):
+        current = self.send('current')
+        for spoiler in ('[S1', '密告', '三人', '次は', '回答'):
+            self.assertNotIn(spoiler, current)
+        result = self.shell("grep -R 'N-000' \"$1/srv/nightfall/public/facilities\"")
+        self.assertEqual(len(result.stdout.splitlines()), 3)
+        self.send('fetch', ref='NOAH-R7')
+        self.send('fetch', ref='BKP-0210')
+        self.shell('mkdir -p work/backup\ntar -xzf "$1/srv/nightfall/backups/night-maintenance.tar.gz" -C work/backup')
+        self.assertIn('ARCHIVE_PASSWORD=cinder-47', (self.root / c.HOME / 'work/backup/maintenance/config/archive.env').read_text())
+        self.send('unlock', area='archive', answer=c.PASSWORD)
+        self.send('fetch', ref='D-204')  # Independent documents can be explored out of order.
+        self.send('fetch', ref='MAIL-0216')
+        diff = subprocess.run(['diff', '-u', str(self.root / c.BASE / 'vault/reports/before.txt'),
+                               str(self.root / c.BASE / 'vault/reports/after.txt')], text=True, capture_output=True)
+        self.assertEqual(diff.returncode, 1)
+        self.assertIn('-TERMINAL=E5-03', diff.stdout)
+        self.send('fetch', ref='TERM-E5-03')
+        count = self.shell('sort "$1/srv/nightfall/vault/net/destinations.log" | uniq -c | sort -nr')
+        self.assertEqual(count.stdout.splitlines()[0].split(), ['24', 'liaison-04'])
+        self.send('fetch', ref='LIAISON-04')
+        self.assertEqual(self.game.state['stage'], 8)
         self.fail('recover')
-        self.game.fs.write('home/contractor/recovery/recovery.conf', 'TARGET=relay-07\nOUTPUT=/home/contractor/recovery/output\n')
-        self.fail('recover')
-        script = self.root / 'home/contractor/recovery/recover.sh'
-        script.chmod(0o744)
+        self.shell("printf '%s\\n' TARGET=liaison-04 OUTPUT=/home/contractor/recovery/output > recovery/recovery.conf\nchmod u+x recovery/recover.sh")
         self.send('recover')
-        self.send('recover')
-        self.send('check')
-        home = self.root / 'home/contractor'
-        # Exercise ordinary Unix tools, rather than generating the accepted tar with our helper.
-        subprocess.run(['bash', '-eu', '-c', '''
-mkdir -p staging
-cp recovery/output/access-evidence.txt staging/
-mv staging/access-evidence.txt staging/access.txt
-cp recovery/output/report-diff.txt staging/changes.txt
-cp recovery/output/destination-counts.txt staging/destinations.txt
-cp recovery/output/relay-receipt.txt staging/receipt.txt
-printf '%s\\n' access.txt changes.txt destinations.txt receipt.txt > staging/manifest.txt
-echo CASE=NF-204 > staging/report.txt
-echo TARGET=relay-07 >> staging/report.txt
+        self.assertIn('ren.txt', self.send('current'))
+        self.fail('unlock', area='core', answer=c.KEY)
+        self.shell("""
+printf '%s\\n' SOURCE=C-17 MEETING_POINT=EAST-4 MEETING_TIME=03:10 > staging/plan.txt
 touch staging/READY
 rm transfer-cache/*.tmp
 rmdir transfer-cache/old
-tar -czf submission/evidence.tar.gz staging
-'''], cwd=home, check=True)
+tar -czf submission/decoy.tar.gz staging
+""")
         self.send('check')
+        self.restart()
         self.assertEqual(self.game.state['stage'], 10)
-        self.game.close()
-        self.game = Engine(self.root, self.private)
-        self.assertEqual(self.game.state['stage'], 10)
-        self.fail('submit')
-        self.send('unlock', area='core', answer='ember-204')
-        self.fail('submit')
-        subprocess.run(['bash', '-eu', '-c', '''
+        self.assertEqual(self.game.fs.read(c.OUT + '/.keys/final.key'), (c.KEY + '\n').encode())
+        self.send('unlock', area='core', answer=c.KEY)
+        self.shell("""
+rm staging/plan.txt
+cp "$1/srv/nightfall/records/mail/0216.txt" staging/meeting.txt
+cp "$1/srv/nightfall/records/terminals/E5-03.txt" staging/assignment.txt
+cp "$1/srv/nightfall/records/dependents/D-204.txt" staging/dependent.txt
+cp recovery/output/orders.txt staging/orders.txt
 cp "$1/srv/nightfall/core/directive.txt" staging/directive.txt
-echo directive.txt >> staging/manifest.txt
+printf '%s\\n' meeting.txt assignment.txt dependent.txt orders.txt directive.txt > staging/manifest.txt
+printf '%s\\n' VEHICLE=MX-5 GATE=WEST-2 DEPARTURE=03:26 PASSENGERS=R-12,R-31,R-08,D-204 > staging/report.txt
 tar -czf submission/evidence.tar.gz -C . staging
-''', 'test', str(self.root)], cwd=home, check=True)
-        self.assertIn('MISSION COMPLETE', self.send('submit'))
-        before = self.game.state.copy()
+""")
+        self.assertIn('乗員数: 5', self.send('submit'))
+        self.assertEqual(self.game.fs.read(c.HOME + '/inbox/last-message.txt'), c.COMPLETE.encode())
+        before = json.dumps(self.game.state, sort_keys=True)
         self.send('submit')
         self.send('check')
         self.send('unlock', area='core', answer='ignored')
-        self.assertEqual(self.game.state, before)
+        self.assertEqual(json.dumps(self.game.state, sort_keys=True), before)
         self.assertEqual(self.game.state['cleared'], list(range(1, 11)))
 
-    def test_s8_reset_preserves_previous_evidence(self):
-        self.to(8)
-        original = self.game.fs.read(c.OUT + '/access-evidence.txt')
-        self.game.fs.write('home/contractor/recovery/recovery.conf', 'TARGET=relay-07\nOUTPUT=/home/contractor/recovery/output\n')
-        (self.root / 'home/contractor/recovery/recover.sh').chmod(0o744)
-        self.send('recover')
-        confirmation = self.send('reset')
-        self.assertIn('recover.sh', confirmation['confirm'])
-        self.send('reset', confirmed=True)
-        self.assertFalse(self.game.state['collected'])
+    def test_fetch_permissions_idempotence_and_no_quiz(self):
+        self.fail('fetch', ref='../private')
+        self.fail('fetch', ref=[])
+        self.fail('fetch', ref='D-204')
+        self.fail('unlock', area='archive', answer=c.PASSWORD)
+        self.send('check', answer='foothold')
+        self.assertEqual(self.game.state['stage'], 1)
+        self.send('fetch', ref='BKP-0210')
+        self.send('fetch', ref='BKP-0210')
+        self.assertEqual(self.game.state['stage'], 2)
+        self.fail('unlock', area='archive', answer='CINDER-47')
+        self.send('unlock', area='archive', answer=c.PASSWORD)
+        self.send('fetch', ref='D-204')
+        self.send('fetch', ref='NOAH-R7')
+        self.assertEqual(self.game.state['stage'], 5)
+        self.assertEqual(len(self.game.state['records']), 3)
+
+    def test_decoy_rejects_wrong_route_and_intelligence_attachment(self):
+        self.to(9)
+        self.clean_cache()
+        self.decoy(**{'staging/plan.txt': c.PLAN.replace(b'EAST-4', b'WEST-2')})
+        self.assertIn('配置表', self.fail('check'))
         self.assertFalse(self.game.fs.exists(c.OUT + '/.keys/final.key'))
-        self.assertEqual(self.game.fs.read(c.OUT + '/access-evidence.txt'), original)
-        self.assertEqual(self.game.fs.info('home/contractor/recovery/recover.sh').st_mode & 0o777, 0o644)
-
-    def test_s9_reset_preserves_key_and_originals(self):
-        self.to(9)
-        key = self.game.fs.read(c.OUT + '/.keys/final.key')
-        self.clean_cache()
-        self.submit_files()
-        self.send('reset', confirmed=True)
-        self.assertEqual(self.game.fs.read(c.OUT + '/.keys/final.key'), key)
-        self.assertFalse(self.game.fs.exists('home/contractor/submission/evidence.tar.gz'))
-        self.assertEqual(len(self.game.fs.read('home/contractor/transfer-cache/part-1.tmp')), MIB)
-        self.assertEqual(self.game.state['cleared'], list(range(1, 9)))
-
-    def test_s10_reset_restores_accepted_s9_archive_even_without_staging(self):
-        self.to(9)
-        self.clean_cache()
-        self.submit_files()
-        # S9 is based on submitted contents, not on the choice of packaging tools.
+        self.decoy(**{'staging/orders.txt': c.ORDERS})
+        self.assertIn('2点', self.fail('check'))
+        self.decoy(**{'staging/READY': 'yes'})
+        self.assertIn('空', self.fail('check'))
+        self.decoy(**{'staging/plan.txt': c.PLAN.replace(b'\n', b'\r\n')})
         self.send('check')
-        self.send('unlock', area='core', answer='ember-204')
-        self.submit_files(final=True)
-        self.send('reset', confirmed=True)
-        self.assertTrue(self.game.state['core'])
-        self.assertFalse(self.game.fs.exists('home/contractor/staging/directive.txt'))
-        self.assertEqual(self.game.fs.read('home/contractor/staging/report.txt'), c.REPORT)
-        self.game.validate_submission()
-        self.fail('submit')
+        self.assertTrue(self.game.state['decoy'])
 
-    def test_report_overwrite_failure_then_repair(self):
+    def test_cache_limits_apply_to_both_transmissions(self):
         self.to(9)
-        self.clean_cache()
-        self.submit_files(**{'staging/report.txt': b'CASE=NF-204\n'})
-        self.assertIn('TARGET', self.fail('check'))
-        self.submit_files(**{'staging/report.txt': c.REPORT.rstrip(b'\n')})
-        self.send('check')
-
-    def test_manifest_crlf_and_order_are_accepted(self):
-        self.to(9)
-        self.clean_cache()
-        self.submit_files(**{'staging/manifest.txt': '\r\n'.join(reversed(c.EVIDENCE)) + '\r\n'})
-        self.send('check')
-
-    def test_size_and_missing_originals(self):
-        self.to(9)
-        self.submit_files()
+        self.decoy()
         self.assertIn('old', self.fail('check'))
-        self.game.fs.remove('home/contractor/transfer-cache/old')
+        self.game.fs.remove(c.HOME + '/transfer-cache/old')
         self.assertIn('1 MiB', self.fail('check'))
         self.clean_cache()
-        self.game.fs.remove(c.OUT + '/report-diff.txt')
-        self.assertIn('環境エラー', self.fail('check'))
+        self.send('check')
+        self.send('unlock', area='core', answer=c.KEY)
+        self.submit_files()
+        self.game.fs.write(c.HOME + '/transfer-cache/again.tmp', b'x' * MIB)
+        self.assertIn('1 MiB', self.fail('submit'))
 
-    def test_fake_receipt_is_insufficient(self):
+    def test_final_report_manifest_and_originals(self):
+        self.to(10)
+        self.send('unlock', area='core', answer=c.KEY)
+        self.submit_files(**{'staging/report.txt': c.REPORT.replace(b',D-204', b'')})
+        self.assertIn('乗員', self.fail('submit'))
+        self.submit_files(**{'staging/orders.txt': 'forged'})
+        self.assertIn('署名', self.fail('submit'))
+        self.submit_files(**{'staging/manifest.txt': 'meeting.txt\n' * 5})
+        self.assertIn('manifest', self.fail('submit'))
+        self.game.fs.write(c.SOURCES['meeting.txt'], 'forged')
+        self.submit_files()
+        self.assertIn('原本', self.fail('submit'))
+        self.send('reset', confirmed=True)
+        names = list(c.EVIDENCE) + ['directive.txt']
+        self.submit_files(**{'staging/manifest.txt': '\r\n'.join(reversed(names)) + '\r\n',
+                             'staging/report.txt': c.REPORT.rstrip(b'\n')})
+        self.send('submit')
+
+    def test_early_recovery_and_late_records_keep_core_and_checkpoint(self):
+        self.send('fetch', ref='BKP-0210')
+        self.send('unlock', area='archive', answer=c.PASSWORD)
+        self.send('fetch', ref='LIAISON-04')
+        self.game.fs.write(c.HOME + '/recovery/recovery.conf',
+                           'TARGET=liaison-04\nOUTPUT=/home/contractor/recovery/output\n')
+        (self.root / c.HOME / 'recovery/recover.sh').chmod(0o744)
+        self.send('recover')
+        self.clean_cache()
+        self.decoy()
+        self.send('check')
+        self.send('unlock', area='core', answer=c.KEY)
+        self.submit_files()
+        self.assertIn('環境エラー', self.fail('submit'))
+        for ref in ('D-204', 'TERM-E5-03', 'MAIL-0216', 'NOAH-R7'):
+            self.send('fetch', ref=ref)
+            self.assertEqual(self.game.state['stage'], 10)
+        self.restart()
+        self.send('reset', confirmed=True)
+        self.assertTrue(self.game.state['core'])
+        self.submit_files()
+        self.send('submit')
+
+    def test_reset_repairs_old_record_corruption_saved_at_later_checkpoint(self):
+        self.to(5)
+        self.game.fs.write(c.SOURCES['meeting.txt'], 'accidental edit')
+        self.send('fetch', ref='D-204')
+        self.assertEqual(self.game.fs.read(c.SOURCES['meeting.txt']), b'accidental edit')
+        self.restart()
+        self.send('reset', confirmed=True)
+        self.assertEqual(self.game.fs.read(c.SOURCES['meeting.txt']), c.EVIDENCE['meeting.txt'])
+        self.assertIn('D-204', self.game.state['records'])
+
+    def test_hint_printf_examples_produce_valid_plan_and_report(self):
+        import shlex
+        for number, expected in [(9, c.PLAN), (10, c.REPORT)]:
+            line = next(line for line in c.STAGES[number]['hints'][2].splitlines()
+                        if line.startswith('printf') and ('MEETING_POINT' in line or 'PASSENGERS' in line))
+            args = shlex.split(line.split(' > ', 1)[0])
+            result = subprocess.run(args, capture_output=True, check=True)
+            self.assertEqual(result.stdout, expected)
+
+    def test_recovery_reset_preserves_progress_and_can_be_retried(self):
         self.to(8)
-        self.game.fs.write('home/contractor/recovery/recovery.conf', 'TARGET=relay-07\nOUTPUT=/home/contractor/recovery/output\n')
-        (self.root / 'home/contractor/recovery/recover.sh').chmod(0o744)
-        self.game.fs.write(c.OUT + '/relay-receipt.txt', c.RECEIPT)
-        self.assertIn('記録されていません', self.fail('check'))
+        self.game.fs.write(c.HOME + '/recovery/recovery.conf', 'bad')
+        self.send('reset', confirmed=True)
+        self.assertIn(b'TARGET=liaison-00', self.game.fs.read(c.HOME + '/recovery/recovery.conf'))
+        self.assertFalse(self.game.state['collected'])
+        self.game.fs.write(c.HOME + '/recovery/recovery.conf', 'TARGET=liaison-04\nOUTPUT=/home/contractor/recovery/output\n')
+        (self.root / c.HOME / 'recovery/recover.sh').chmod(0o744)
+        self.send('recover')
+        self.game.fs.remove(c.HOME + '/inbox/ren.txt')
+        self.send('reset', confirmed=True)
+        self.assertTrue(self.game.state['collected'])
+        self.assertTrue(self.game.fs.exists(c.HOME + '/inbox/ren.txt'))
+        self.assertFalse(self.game.fs.exists(c.OUT + '/.keys/final.key'))
 
-    def test_config_is_data_not_executable(self):
+    def test_reset_restores_core_and_accepted_decoy_after_restart(self):
+        self.to(10)
+        self.send('unlock', area='core', answer=c.KEY)
+        self.game.fs.remove(c.BASE + '/core')
+        self.game.fs.write(c.HOME + '/staging/plan.txt', 'bad')
+        self.restart()
+        self.send('reset', confirmed=True)
+        self.assertEqual(self.game.fs.read(c.BASE + '/core/directive.txt'), c.DIRECTIVE.encode())
+        self.assertEqual(self.game.fs.read(c.HOME + '/staging/plan.txt'), c.PLAN)
+        self.assertTrue(self.game.state['core'])
+        self.assertTrue(self.game.state['decoy'])
+
+    def test_config_is_data_and_fake_files_do_not_advance(self):
         self.to(8)
         marker = Path(self.temp.name) / 'SHOULD-NOT-EXIST'
-        self.game.fs.write('home/contractor/recovery/recovery.conf', f'TARGET=$(touch {marker})\nOUTPUT=/home/contractor/recovery/output\n')
+        self.game.fs.write(c.HOME + '/recovery/recovery.conf', f'TARGET=$(touch {marker})\nOUTPUT=/home/contractor/recovery/output\n')
         self.fail('recover')
         self.assertFalse(marker.exists())
-        self.game.fs.write('home/contractor/recovery/recovery.conf', 'TARGET=relay-07\nTARGET=relay-07\nOUTPUT=/home/contractor/recovery/output\n')
+        self.game.fs.write(c.HOME + '/recovery/recovery.conf', 'TARGET=liaison-04\nTARGET=liaison-04\nOUTPUT=/home/contractor/recovery/output\n')
         self.fail('recover')
+        self.game.fs.write(c.OUT + '/orders.txt', c.ORDERS)
+        self.send('check')
+        self.assertEqual(self.game.state['stage'], 8)
+        self.fail('submit')
 
-    def test_transition_interruption_can_be_retried(self):
-        self.to(4)
+    def test_record_interruption_retries_without_duplicate_progress(self):
         original = self.game.fs.write
         def broken(path, data, *args, **kwargs):
-            if path.endswith('access-evidence.txt'):
+            if path.endswith('notes.txt'):
                 raise OSError('simulated disk failure')
             return original(path, data, *args, **kwargs)
         with mock.patch.object(self.game.fs, 'write', side_effect=broken):
-            self.fail('check', answer='glass-maintenance.tar.gz')
-        self.assertEqual(self.game.state['stage'], 4)
-        self.game.close()
-        self.game = Engine(self.root, self.private)
-        self.assertEqual(self.game.state['stage'], 5)
-        self.assertEqual(self.game.fs.read(c.OUT + '/access-evidence.txt'), c.EVIDENCE['access.txt'])
-        self.assertEqual(self.game.state['cleared'], [1, 2, 3, 4])
+            self.fail('fetch', ref='NOAH-R7')
+        self.restart()
+        self.assertEqual(self.game.state['records'], ['NOAH-R7'])
+        self.assertEqual(self.game.state['stage'], 2)
+        self.assertTrue(self.game.fs.exists(c.BASE + '/records/research/notes.txt'))
+        self.send('fetch', ref='NOAH-R7')
+        self.assertEqual(self.game.state['stage'], 2)
 
-    def test_reset_is_resumable_and_operator_rebuild_restores_home(self):
+    def test_decoy_and_completion_interruption_are_resumable(self):
+        self.to(9)
+        self.clean_cache()
+        self.decoy()
+        original = self.game.fs.write
+        def broken(path, data, *args, **kwargs):
+            if path.endswith('final.key'):
+                raise OSError('simulated disk failure')
+            return original(path, data, *args, **kwargs)
+        with mock.patch.object(self.game.fs, 'write', side_effect=broken):
+            self.fail('check')
+        self.restart()
+        self.assertTrue(self.game.state['decoy'])
+        self.send('unlock', area='core', answer=c.KEY)
+        self.submit_files()
+        with mock.patch.object(self.game.fs, 'write', side_effect=OSError('simulated disk failure')):
+            self.fail('submit')
+        self.restart()
+        self.assertTrue(self.game.state['submitted'])
+        self.assertEqual(self.send('current'), c.COMPLETE)
+
+    def test_reset_and_operator_rebuild_are_resumable(self):
         self.to(9)
         self.game.state['pending'] = {'kind': 'reset'}
         self.game.save()
-        self.game.fs.remove('home/contractor/transfer-cache')
-        self.game.close()
-        self.game = Engine(self.root, self.private)
-        self.assertTrue(self.game.fs.exists('home/contractor/transfer-cache/old'))
-        self.game.fs.remove('home/contractor')
-        self.game.state['pending'] = {'kind': 'rebuild'}
-        self.game.save()
-        self.game.resume()
-        self.assertEqual(self.game.fs.read(c.OUT + '/.keys/final.key'), b'ember-204\n')
+        self.game.fs.remove(c.HOME + '/transfer-cache')
+        self.restart()
+        self.assertTrue(self.game.fs.exists(c.HOME + '/transfer-cache/old'))
+        self.game.fs.remove(c.HOME)
+        self.game.action('rebuild')
+        self.assertEqual(self.game.fs.read(c.SOURCES['orders.txt']), c.ORDERS.encode())
 
-    def test_hints_replay_and_stale_answers(self):
-        self.send('hint')
-        self.send('hint')
-        self.send('hint')
-        self.send('hint')
+    def test_hints_adapt_to_missing_records_and_stale_prompts_fail(self):
+        self.send('fetch', ref='BKP-0210')
+        for _ in range(4):
+            self.send('hint')
         self.assertEqual(len(self.game.state['hints']['1']), 3)
-        self.send('check', answer='foothold', stage=1)
-        self.fail('check', answer='nightjar', stage=1)
+        self.send('fetch', ref='NOAH-R7')
+        self.send('hint')
+        self.assertEqual(self.game.state['hints']['3'], [0])
+        self.assertIn('ヒント 3', self.send('hints'))
+        prompt = self.send('unlock', area='archive')
+        self.send('unlock', area='archive', answer=c.PASSWORD)
+        self.fail('unlock', area='archive', answer=c.PASSWORD, stage=prompt['stage'])
         self.fail('replay', number=10)
-        before = self.game.state.copy()
+        before = json.dumps(self.game.state, sort_keys=True)
         self.send('replay', number=1)
-        self.assertEqual(self.game.state, before)
+        self.assertEqual(json.dumps(self.game.state, sort_keys=True), before)
         self.assertEqual(json.loads((self.private / 'replay-request.json').read_text()), {'stage': 1})
 
-    def test_published_modes_are_correct_under_private_service_umask(self):
+    def test_source_modes_and_symlink_isolation(self):
         old = os.umask(0o077)
         try:
-            self.game.fs.write('home/contractor/recovery/recover.sh', c.RECOVER, 0o644)
-            self.game.fs.mkdir('home/contractor/new-directory')
+            self.game.fs.write(c.HOME + '/recovery/recover.sh', c.RECOVER, 0o644)
+            self.game.fs.mkdir(c.HOME + '/new-directory')
         finally:
             os.umask(old)
-        self.assertEqual(self.game.fs.info('home/contractor/recovery/recover.sh').st_mode & 0o777, 0o644)
-        self.assertEqual(self.game.fs.info('home/contractor/new-directory').st_mode & 0o777, 0o755)
-
-    def test_public_symlinks_never_reach_private_or_outside_files(self):
+        self.assertEqual(self.game.fs.info(c.HOME + '/recovery/recover.sh').st_mode & 0o777, 0o644)
+        self.assertEqual(self.game.fs.info(c.HOME + '/new-directory').st_mode & 0o777, 0o755)
         outside = Path(self.temp.name) / 'outside'
         outside.mkdir()
         marker = outside / 'secret'
         marker.write_text('untouched')
-        self.game.fs.remove('home/contractor/inbox')
-        (self.root / 'home/contractor/inbox').symlink_to(outside, target_is_directory=True)
+        self.game.fs.remove(c.HOME + '/inbox')
+        (self.root / c.HOME / 'inbox').symlink_to(outside, target_is_directory=True)
         with self.assertRaises(OSError):
-            self.game.fs.write('home/contractor/inbox/secret', 'bad')
+            self.game.fs.write(c.HOME + '/inbox/secret', 'bad')
         with self.assertRaises(OSError):
-            self.game.fs.read('home/contractor/inbox/secret')
+            self.game.fs.read(c.HOME + '/inbox/secret')
         self.send('reset', confirmed=True)
         self.assertEqual(marker.read_text(), 'untouched')
-        self.assertFalse((self.root / 'home/contractor/inbox').is_symlink())
-        (self.root / 'home/contractor/link').symlink_to(marker)
-        with self.assertRaises(OSError):
-            self.game.fs.read('home/contractor/link')
+        self.assertFalse((self.root / c.HOME / 'inbox').is_symlink())
 
-    def test_all_practice_stages_have_start_snapshots(self):
-        self.game.close()
+    def test_all_practice_checkpoints_and_old_save_rejection(self):
         for n in range(1, 11):
             with self.subTest(n=n), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder) / 'root'
@@ -283,10 +365,16 @@ tar -czf submission/evidence.tar.gz -C . staging
                 game = Engine(root, Path(folder) / 'private')
                 practice(game, n)
                 self.assertEqual(game.state['stage'], n)
-                self.assertEqual(game.state['cleared'], list(range(1, n)))
                 self.assertTrue(game.load_snapshot(n))
                 game.close()
-        self.game = Engine(self.root, self.private)
+        self.game.state['scenario'] = 1
+        self.game.save()
+        dbpath = self.private / 'state.sqlite3'
+        before = sqlite3.connect(dbpath).execute('SELECT data FROM state').fetchone()[0]
+        with self.assertRaisesRegex(ValueError, '旧シナリオ'):
+            Engine(self.root, self.private)
+        after = sqlite3.connect(dbpath).execute('SELECT data FROM state').fetchone()[0]
+        self.assertEqual(before, after)
 
 
 class ArchiveTest(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Authoritative state machine. No player answer is ever interpreted as code."""
+"""Private record service, recoverable checkpoints and bounded submission validation."""
 import base64
 import gzip
 import io
@@ -33,12 +33,14 @@ class Engine:
         row = self.db.execute('SELECT data FROM state WHERE id=1').fetchone()
         if row:
             self.state = json.loads(row[0])
-            if self.state['scenario'] != 1:
-                raise ValueError('未対応のシナリオ版です。運営に連絡してください。')
+            if self.state['scenario'] != c.SCENARIO:
+                self.db.close()
+                raise ValueError('旧シナリオの保存データです。運営に新しい専用環境の用意を依頼してください。既存の進捗は変更していません。')
         else:
-            self.state = dict(scenario=1, stage=1, cleared=[], archive=False, core=False,
-                              collected=False, started=None, elapsed=0, hints={},
-                              submitted=False, pending={'kind': 'advance', 'target': 1})
+            self.state = dict(scenario=c.SCENARIO, stage=1, cleared=[], records=[],
+                              archive=False, core=False, collected=False, decoy=False,
+                              started=None, elapsed=0, hints={}, submitted=False,
+                              pending={'kind': 'init'})
             self.save()
         self.resume()
 
@@ -53,8 +55,8 @@ class Engine:
         for path, data in files.items():
             self.fs.write(path, data)
 
-    def transition(self, target):
-        self.state['pending'] = {'kind': 'advance', 'target': target}
+    def action(self, kind, **data):
+        self.state['pending'] = dict(kind=kind, **data)
         self.save()
         self.resume()
 
@@ -63,105 +65,130 @@ class Engine:
         if not pending:
             return
         kind = pending['kind']
-        if kind == 'advance':
-            target = pending['target']
-            self.fs.mkdir('home/contractor')
-            self.fs.mkdir('srv/nightfall')
-            self.put(c.stage_files(target))
-            if target == 5:
-                self.fs.write(c.OUT + '/access-evidence.txt', c.EVIDENCE['access.txt'])
-            if target == 7:
-                self.fs.write(c.OUT + '/report-diff.txt', c.EVIDENCE['changes.txt'])
-            if target == 8:
-                self.fs.write(c.OUT + '/destination-counts.txt', c.EVIDENCE['destinations.txt'])
-            if target == 9:
-                self.fs.mkdir('home/contractor/submission')
-                self.fs.mkdir('home/contractor/transfer-cache/old')
-            # Save start snapshots before announcing the stage. Repeating this operation
-            # after interruption recreates the same transition and never advances twice.
-            self.snapshot(target)
-            if target > 1 and target - 1 not in self.state['cleared']:
-                self.state['cleared'].append(target - 1)
-            self.state['stage'] = target
-            if target >= 6:
-                self.state['archive'] = True
+        if kind == 'init':
+            self.fs.mkdir(c.HOME)
+            self.fs.mkdir(c.BASE)
+            self.put(c.initial_files())
+        elif kind == 'record':
+            ref = pending['ref']
+            self.put(c.record_files(ref))
+            if ref not in self.state['records']:
+                self.state['records'].append(ref)
+            if not self.state['collected']:
+                self.state['stage'] = min(8, 1 + len(self.state['records']) + int(self.state['archive']))
+        elif kind == 'archive':
+            self.put(c.archive_files())
+            self.state['archive'] = True
+            self.state['stage'] = min(8, 2 + len(self.state['records']))
         elif kind == 'collect':
-            self.put({c.OUT + '/relay-receipt.txt': c.RECEIPT, c.OUT + '/.keys/final.key': 'ember-204\n'})
+            self.put(c.recovery_files())
+            self.fs.mkdir(c.HOME + '/submission')
+            self.fs.mkdir(c.HOME + '/transfer-cache/old')
             self.state['collected'] = True
+            self.state['stage'] = 9
+        elif kind == 'decoy':
+            self.put(c.decoy_files())
+            self.state['decoy'] = True
+            self.state['stage'] = 10
         elif kind == 'core':
-            self.fs.write('srv/nightfall/core/directive.txt', c.DIRECTIVE)
+            self.put({c.BASE + '/core/directive.txt': c.DIRECTIVE})
             self.state['core'] = True
+        elif kind == 'complete':
+            self.put({c.HOME + '/inbox/last-message.txt': c.COMPLETE})
+            self.state['submitted'] = True
         elif kind in ('reset', 'rebuild'):
             snapshot = self.load_snapshot(self.state['stage'])
-            roots = c.OWNED[self.state['stage']] if kind == 'reset' else ['home/contractor', 'srv/nightfall']
-            for path in roots:
+            for path in c.ROOTS:
                 self.fs.remove(path)
             for path, data, mode in snapshot:
-                if any(path == p or path.startswith(p + '/') for p in roots):
-                    if data is None:
-                        self.fs.mkdir(path)
-                    else:
-                        self.fs.write(path, base64.b64decode(data), mode)
-            if self.state['stage'] == 8:
-                self.state['collected'] = False
-            if kind == 'rebuild' and self.state['core']:
-                self.fs.write('srv/nightfall/core/directive.txt', c.DIRECTIVE)
+                if data is None:
+                    self.fs.mkdir(path)
+                else:
+                    self.fs.write(path, base64.b64decode(data), mode)
+            # A later checkpoint may contain a player's accidental edits to an old
+            # record. Repair published records from private originals, so reset
+            # cannot permanently preserve a corrupted clue or signed document.
+            self.put(c.initial_files())
+            for ref in self.state['records']:
+                self.put({p: data for p, data in c.record_files(ref).items()
+                          if p.startswith(c.BASE + '/')})
+            if self.state['archive']:
+                self.put(c.archive_files())
+            if self.state['collected']:
+                self.put(c.recovery_records())
+            if self.state['decoy']:
+                self.put(c.decoy_files())
+            if self.state['core']:
+                self.put({c.BASE + '/core/directive.txt': c.DIRECTIVE})
+            if self.state['submitted']:
+                self.put({c.HOME + '/inbox/last-message.txt': c.COMPLETE})
         else:
             raise ValueError('未対応の復旧処理です。')
+        self.state['cleared'] = list(range(1, 11 if self.state['submitted'] else self.state['stage']))
+        if kind not in ('reset', 'rebuild'):
+            self.snapshot(self.state['stage'])
         self.state['pending'] = None
         self.save()
 
     def snapshot(self, stage):
-        entries = self.fs.tree('home/contractor') + self.fs.tree('srv/nightfall')
-        if stage == 10:
-            # The accepted archive is the authority, even if staging was later edited.
-            data = self.fs.read('home/contractor/submission/evidence.tar.gz', MIB)
-            accepted = self.archive_members(data)
-            roots = c.OWNED[10]
-            entries = [entry for entry in entries if not any(entry[0] == p or entry[0].startswith(p + '/') for p in roots)]
-            entries += [('home/contractor/staging', None, 0o755), ('home/contractor/submission/evidence.tar.gz', data, 0o644)]
-            entries += [('home/contractor/' + path, body, 0o644) for path, body in accepted.items()]
-        encoded = [(p, None if data is None else base64.b64encode(data).decode(), mode) for p, data, mode in entries]
+        entries = self.fs.tree(c.HOME) + self.fs.tree(c.BASE)
+        encoded = [(p, None if data is None else base64.b64encode(data).decode(), mode)
+                   for p, data, mode in entries]
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO snapshots VALUES (?, ?)', (stage, json.dumps(encoded)))
 
     def load_snapshot(self, stage):
         row = self.db.execute('SELECT data FROM snapshots WHERE stage=?', (stage,)).fetchone()
         if not row:
-            raise Incomplete('開始時スナップショットがありません。運営へ連絡してください。')
+            raise Incomplete('復元用の保存地点がありません。運営へ連絡してください。')
         return json.loads(row[0])
 
     def current(self):
-        n = self.state['stage']
         if self.state['submitted']:
-            return c.COMPLETE + '\n\n' + self.status()
-        stage = c.STAGES[n]
-        paths = ['/home/contractor']
-        for threshold, path in [(3, 'staff'), (4, 'logs'), (5, 'backups'), (6, 'vault')]:
-            if n >= threshold:
-                paths.append('/srv/nightfall/' + path)
+            return c.COMPLETE
+        areas = ['/srv/nightfall/public', '/srv/nightfall/maintenance']
+        if self.state['records']:
+            areas.append('/srv/nightfall/records')
+        if 'BKP-0210' in self.state['records']:
+            areas.append('/srv/nightfall/backups')
+        if self.state['archive']:
+            areas.append('/srv/nightfall/vault')
         if self.state['core']:
-            paths.append('/srv/nightfall/core')
-        guide = '\n\n操作の手引き: ' + stage['guide'] if stage['guide'] else ''
-        return f"[S{n}/10: {stage['title']}]\n[受信 / Aoki]\n{stage['task']}{guide}\n\n解放済み: " + ', '.join(paths)
+            areas.append('/srv/nightfall/core')
+        inbox = '~/inbox/request.txt'
+        if self.state['collected']:
+            inbox += ', ~/inbox/ren.txt'
+        return ('NIGHTFALL MAINTENANCE TERMINAL\nHost: maintenance-03 / User: contractor\n'
+                + '受信: ' + inbox + '\n接続済み:\n' + '\n'.join(areas)
+                + '\n\n操作: mission help / 記録照会: mission fetch 参照番号')
 
     def status(self):
-        elapsed = self.state['elapsed']
-        minutes = int(elapsed // 60)
-        hint_count = sum(len(v) for v in self.state['hints'].values())
-        cleared = len(self.state['cleared'])
-        mode = '目安の120分を超えています。引き続き練習できます。' if minutes >= 120 else '120分は目安です。時間切れによる失敗はありません。'
-        learned = '\n'.join(f"S{n}: {c.STAGES[n]['guide']}" for n in self.state['cleared'] if c.STAGES[n]['guide'])
-        return f'クリア: {cleared}/10 / 経過（プレイ時間）: {minutes}分 / ヒント: {hint_count}\n{mode}\n覚えた操作:\n{learned}'
+        minutes = int(self.state['elapsed'] // 60)
+        hints = sum(len(v) for v in self.state['hints'].values())
+        records = ', '.join(self.state['records']) or 'なし'
+        areas = ['archive'] if self.state['archive'] else []
+        if self.state['core']:
+            areas.append('core')
+        return (f'経過: {minutes}分 / ヒント: {hints}\n取得記録: {records}\n'
+                + '認証済み: ' + (', '.join(areas) or 'なし')
+                + f"\n保存地点: {self.state['stage']}（練習用番号）"
+                + '\n120分は目安です。時間切れによる失敗はありません。')
 
-    def require(self, stage):
-        if self.state['stage'] != stage or self.state['submitted']:
-            raise Incomplete('現在の依頼に対応する操作を実行してください。mission で確認できます。')
+    def fetch(self, ref):
+        if not isinstance(ref, str) or ref not in c.REFS:
+            raise Incomplete('該当する参照番号がありません。資料中の表記を確認してください。')
+        if ref in self.state['records']:
+            return '[取得済み] ' + ref + '\n' + '\n'.join('/' + p for p in c.record_files(ref))
+        if self.state['submitted']:
+            raise Incomplete('この回線の受付は終了しています。')
+        if ref in c.RESTRICTED and not self.state['archive']:
+            raise Incomplete('保管庫の認証が必要です。')
+        self.action('record', ref=ref)
+        return '[記録受信] ' + ref + '\n' + '\n'.join('/' + p for p in c.record_files(ref))
 
     def config(self):
-        raw = self.fs.read('home/contractor/recovery/recovery.conf', 4096).decode('utf-8')
         config = {}
-        for line in raw.splitlines():
+        for line in self.fs.read(c.HOME + '/recovery/recovery.conf', 4096).decode().splitlines():
             if not line.strip() or line.lstrip().startswith('#'):
                 continue
             key, sep, value = line.partition('=')
@@ -170,28 +197,26 @@ class Engine:
                 raise Incomplete('recovery.conf は TARGET と OUTPUT を1行ずつ指定してください。')
             config[key] = value.strip()
         if set(config) != {'TARGET', 'OUTPUT'}:
-            raise Incomplete('recovery.conf に TARGET または OUTPUT がありません。')
-        if config['TARGET'] != 'relay-07':
-            raise Incomplete(f"[回収失敗] 接続先 {config['TARGET'][:80]} は停止しています。通信先の集計結果と recovery.conf を確認してください。")
+            raise Incomplete('TARGET または OUTPUT がありません。')
+        if config['TARGET'] != c.TARGET:
+            raise Incomplete('指定先から応答がありません。通信記録と TARGET を確認してください。')
         if config['OUTPUT'] != '/home/contractor/recovery/output':
             raise Incomplete('OUTPUT は /home/contractor/recovery/output に戻してください。')
-        return config
 
     def executable(self):
-        info = self.fs.info('home/contractor/recovery/recover.sh')
+        info = self.fs.info(c.HOME + '/recovery/recover.sh')
         if not stat.S_ISREG(info.st_mode) or not info.st_mode & stat.S_IXUSR:
             raise Incomplete('recover.sh に所有者の実行権限がありません。ls -l と chmod を確認してください。')
 
     def recover(self):
-        if self.state['collected'] and self.state['stage'] >= 9:
-            return '回収は完了済みです。'
-        self.require(8)
+        if self.state['collected']:
+            return '[受信済み] ~/recovery/output/orders.txt'
+        if 'LIAISON-04' not in self.state['records']:
+            raise Incomplete('回収ツールが接続されていません。')
         self.config()
         self.executable()
-        self.state['pending'] = {'kind': 'collect'}
-        self.save()
-        self.resume()
-        return '[回収成功] 最終鍵の保管先は受領記録に残した。先に回収済み証拠を持ち出せる形にしてくれ。\nmission check で次へ。'
+        self.action('collect')
+        return '[記録受信] ~/recovery/output/orders.txt\n[新着] ~/inbox/ren.txt'
 
     @staticmethod
     def archive_members(data):
@@ -236,46 +261,10 @@ class Engine:
         except (tarfile.TarError, EOFError, OSError, zlib.error) as exc:
             raise Incomplete('アーカイブが破損しています。tar -czf で作り直してください。') from exc
 
-    def validate_submission(self, final=False):
-        data = self.fs.read('home/contractor/submission/evidence.tar.gz', MIB)
-        # Keep inspection confined to a private temporary directory. Never extract tar paths.
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix='submission-', dir=self.private) as temporary:
-            copy = Path(temporary) / 'evidence.tar.gz'
-            copy.write_bytes(data)
-            members = self.archive_members(copy.read_bytes())
-        evidence = dict(c.EVIDENCE)
-        if final:
-            evidence['directive.txt'] = c.DIRECTIVE.encode()
-        expected = set(evidence) | {'manifest.txt', 'report.txt', 'READY'}
-        missing = expected - {PurePosixPath(p).name for p in members}
-        if missing:
-            name = sorted(missing)[0]
-            raise Incomplete(f'staging/{name} がありません。必要なファイルを用意して再梱包してください。')
-        if set(members) != {'staging/' + name for name in expected}:
-            raise Incomplete(f'アーカイブの通常ファイルは指定の{len(expected)}点だけにしてください。')
-        for name, baseline in evidence.items():
-            if members['staging/' + name] != baseline:
-                raise Incomplete(f'staging/{name} の内容が基準と一致しません。元の証拠をコピーしてください。')
-        manifest = members['staging/manifest.txt'].replace(b'\r\n', b'\n').splitlines()
-        if len(manifest) != len(evidence) or set(manifest) != {name.encode() for name in evidence}:
-            raise Incomplete('manifest.txt は証拠のファイル名を1行ずつ、重複なく記載してください。')
-        report = members['staging/report.txt']
-        if report not in (c.REPORT, c.REPORT.rstrip(b'\n')):
-            if b'TARGET=relay-07' not in report.splitlines():
-                raise Incomplete('report.txt に正しい TARGET の行がありません。上書きと追記の違いを確認してください。ヒント: mission hint')
-            raise Incomplete('report.txt は CASE=NF-204 と TARGET=relay-07 の2行にしてください。')
-        if members['staging/READY']:
-            raise Incomplete('READY は空の通常ファイルにしてください。')
-        for name, source in c.SOURCE_NAMES.items():
-            if self.fs.read(c.OUT + '/' + source) != c.EVIDENCE[name]:
-                raise Incomplete(f'元の証拠 {source} を残してください。運営の環境復旧で元に戻せます。')
-        if final and self.fs.read('srv/nightfall/core/directive.txt') != c.DIRECTIVE.encode():
-            raise Incomplete('元の指示書が変更されています。運営へ復旧を依頼してください。')
-        if self.fs.exists('home/contractor/transfer-cache/old'):
+    def validate_cache(self, data):
+        if self.fs.exists(c.HOME + '/transfer-cache/old'):
             raise Incomplete('transfer-cache/old が残っています。空のディレクトリを整理してください。')
         total = len(data)
-        # Bound memory while summing logical file sizes; no file contents are loaded.
         def size(fd, depth=0):
             if depth > 32:
                 raise Incomplete('transfer-cache の階層が深すぎます。')
@@ -295,60 +284,107 @@ class Engine:
                 if subtotal > MIB:
                     break
             return subtotal
-        if self.fs.exists('home/contractor/transfer-cache'):
-            with self.fs.directory(self.fs.parts('home/contractor/transfer-cache')) as fd:
+        if self.fs.exists(c.HOME + '/transfer-cache'):
+            with self.fs.directory(self.fs.parts(c.HOME + '/transfer-cache')) as fd:
                 total += size(fd)
         if total > MIB:
-            raise Incomplete('キャッシュと提出アーカイブの合計が1 MiBを超えています。削除可能な一時ファイルを整理してください。')
-        return members
+            raise Incomplete('キャッシュと送信アーカイブの合計が1 MiBを超えています。')
 
-    def check(self, answer=None):
+    @staticmethod
+    def fields(body, keys):
+        lines = body.replace(b'\r\n', b'\n').splitlines()
+        parsed = {}
+        if len(lines) != len(keys):
+            raise Incomplete('設定の行数が送信仕様と一致しません。')
+        for line, expected in zip(lines, keys):
+            key, sep, value = line.partition(b'=')
+            if not sep or key != expected:
+                raise Incomplete('設定のキーと順序を送信仕様で確認してください。')
+            parsed[key] = value
+        return parsed
+
+    def validate_decoy(self):
+        data = self.fs.read(c.HOME + '/submission/decoy.tar.gz', MIB)
+        members = self.archive_members(data)
+        if set(members) != {'staging/plan.txt', 'staging/READY'}:
+            raise Incomplete('協力者報告は staging/plan.txt と staging/READY の2点だけにしてください。')
+        if members['staging/READY']:
+            raise Incomplete('READY は空の通常ファイルにしてください。')
+        keys = [b'SOURCE', b'MEETING_POINT', b'MEETING_TIME']
+        plan = self.fields(members['staging/plan.txt'], keys)
+        if plan != self.fields(c.PLAN, keys):
+            raise Incomplete('報告を送信できません。情報源・配置表・受付時刻を照合してください。')
+        self.validate_cache(data)
+
+    def validate_submission(self):
+        data = self.fs.read(c.HOME + '/submission/evidence.tar.gz', MIB)
+        members = self.archive_members(data)
+        evidence = dict(c.EVIDENCE, **{'directive.txt': c.DIRECTIVE.encode()})
+        expected = set(evidence) | {'manifest.txt', 'report.txt', 'READY'}
+        if set(members) != {'staging/' + name for name in expected}:
+            raise Incomplete('移送資料の構成が一致しません。maintenance/transport-format.txt を確認してください。')
+        for name, baseline in evidence.items():
+            if members['staging/' + name] != baseline:
+                raise Incomplete(f'{name} の署名が一致しません。原本をコピーしてください。')
+        manifest = members['staging/manifest.txt'].replace(b'\r\n', b'\n').splitlines()
+        if len(manifest) != len(evidence) or set(manifest) != {n.encode() for n in evidence}:
+            raise Incomplete('manifest.txt は原本5点のファイル名を1行ずつ、重複なく記載してください。')
+        keys = [b'VEHICLE', b'GATE', b'DEPARTURE', b'PASSENGERS']
+        report = self.fields(members['staging/report.txt'], keys)
+        baseline = self.fields(c.REPORT, keys)
+        if report != baseline:
+            raise Incomplete('車両・検問・出発時刻・乗員が移送資料と一致しません。')
+        if members['staging/READY']:
+            raise Incomplete('READY は空の通常ファイルにしてください。')
+        for name, source in dict(c.SOURCES, **{'directive.txt': c.BASE + '/core/directive.txt'}).items():
+            if self.fs.read(source) != evidence[name]:
+                raise Incomplete('原本の署名が一致しません。mission reset または運営の復旧を利用してください。')
+        self.validate_cache(data)
+
+    def check(self):
         if self.state['submitted']:
             return c.COMPLETE
-        n = self.state['stage']
-        if n in (5, 10):
-            return 'vault unlock archive で認証してください。' if n == 5 else 'vault unlock core で認証し、mission submit で提出してください。'
-        if n == 8:
-            self.config()
-            self.executable()
-            if not self.state['collected']:
-                raise Incomplete('管理側に回収成功が記録されていません。./recover.sh を実行してください。')
-            if self.fs.read(c.OUT + '/relay-receipt.txt') != c.RECEIPT.encode() or self.fs.read(c.OUT + '/.keys/final.key') != b'ember-204\n':
-                raise Incomplete('回収成果物が不足しています。./recover.sh を再実行してください。')
-        elif n == 9:
-            self.validate_submission()
-        else:
-            valid = {1: ['foothold'], 2: ['nightjar'], 3: ['GLASS'], 4: ['glass-maintenance.tar.gz', '/srv/nightfall/backups/glass-maintenance.tar.gz'], 6: ['NF-204'], 7: ['relay-07']}
-            if not isinstance(answer, str):
-                return {'prompt': '回答: ', 'stage': n}
-            if answer.strip() not in valid[n]:
-                raise Incomplete('回答が一致しません。依頼と手がかりを確認してください。必要なら mission hint。')
-        self.transition(n + 1)
-        return '[確認成功]\n' + self.current()
+        if self.state['decoy']:
+            return '[送信済み] C-17 / 受領票: ~/recovery/output/receipt.txt'
+        if not self.state['collected']:
+            return '[送信待機] 協力者回線は未接続。資料の照会は mission fetch 参照番号。'
+        self.validate_decoy()
+        self.action('decoy')
+        return '[送信受付] C-17\n受領票: ~/recovery/output/receipt.txt'
 
     def unlock(self, area, password):
         if area not in ('archive', 'core'):
             raise Incomplete('保管庫は archive または core を指定してください。')
         if self.state[area]:
-            return f'{area} は解放済みです。'
-        self.require(5 if area == 'archive' else 10)
+            return f'{area} は認証済みです。'
+        if area == 'archive' and 'BKP-0210' not in self.state['records']:
+            raise Incomplete('保守セッションがありません。')
+        if area == 'core' and not self.state['decoy']:
+            raise Incomplete('一時認証鍵はまだ発行されていません。')
         if not isinstance(password, str):
             return {'prompt': 'パスワード: ', 'secret': True, 'stage': self.state['stage']}
-        if password.strip() != ('cinder-47' if area == 'archive' else 'ember-204'):
+        if password.strip() != (c.PASSWORD if area == 'archive' else c.KEY):
             raise Incomplete('認証できません。パスワードを確認してください。')
-        if area == 'archive':
-            self.transition(6)
-        else:
-            self.state['pending'] = {'kind': 'core'}
-            self.save()
-            self.resume()
-        return '[認証成功]\n' + self.current()
+        self.action(area)
+        return '[認証成功] /srv/nightfall/' + ('vault' if area == 'archive' else 'core')
+
+    def hint_context(self):
+        if not self.state['collected']:
+            for n, ref in [(1, 'NOAH-R7'), (2, 'BKP-0210')]:
+                if ref not in self.state['records']:
+                    return n
+            if not self.state['archive']:
+                return 3
+            for n, ref in [(4, 'MAIL-0216'), (5, 'TERM-E5-03'), (6, 'D-204'), (7, 'LIAISON-04')]:
+                if ref not in self.state['records']:
+                    return n
+            return 8
+        return 10 if self.state['decoy'] else 9
 
     def dispatch(self, request):
-        # stage tags prevent a second terminal's delayed answer from applying to a new stage.
         self.resume()
         if 'stage' in request and request['stage'] != self.state['stage']:
-            raise Incomplete('依頼が更新されています。mission で確認してください。')
+            raise Incomplete('端末の接続状態が更新されています。操作をやり直してください。')
         op = request.get('op', 'current')
         if op == 'current':
             return self.current()
@@ -356,51 +392,49 @@ class Engine:
             return c.HELP
         if op == 'status':
             return self.status()
+        if op == 'fetch':
+            return self.fetch(request.get('ref'))
         if op == 'check':
-            return self.check(request.get('answer'))
+            return self.check()
         if op == 'unlock':
             return self.unlock(request.get('area'), request.get('answer'))
         if op == 'recover':
             return self.recover()
         if op in ('hint', 'hints'):
-            stage = str(self.state['stage'])
-            history = self.state['hints'].setdefault(stage, [])
-            if op == 'hint' and len(history) < 3:
+            if op == 'hints':
+                return '\n\n'.join(f'手掛かり {key} / ヒント {i + 1}: {c.STAGES[int(key)]["hints"][i]}'
+                                      for key, history in self.state['hints'].items() for i in history) or 'まだヒントを見ていません。'
+            key = str(self.hint_context())
+            history = self.state['hints'].setdefault(key, [])
+            if len(history) < 3:
                 history.append(len(history))
                 self.save()
-            if not history:
-                return 'まだヒントを見ていません。mission hint で表示できます。'
-            hints = c.STAGES[int(stage)]['hints']
-            return '\n\n'.join(f'ヒント {i + 1}/3: {hints[i]}' for i in history)
+            return '\n\n'.join(f'ヒント {i + 1}/3: {c.STAGES[int(key)]["hints"][i]}' for i in history)
         if op == 'reset':
             if self.state['submitted']:
-                raise Incomplete('本編は完了済みです。mission replay N で練習できます。')
+                raise Incomplete('回線の受付は終了しています。mission replay N で練習できます。')
             if not request.get('confirmed'):
-                return {'confirm': '以下を開始時の状態に戻します。変更は失われます。\n' + '\n'.join('/' + p for p in c.OWNED[self.state['stage']]), 'stage': self.state['stage']}
-            self.state['pending'] = {'kind': 'reset'}
-            self.save()
-            self.resume()
+                return {'confirm': '最後の保存地点へ戻します。以後のファイル編集は失われます。\n'
+                        + '\n'.join('/' + p for p in c.ROOTS), 'stage': self.state['stage']}
+            self.action('reset')
             return '[復元完了]\n' + self.current()
         if op == 'replay':
             n = request.get('number')
-            if type(n) is not int or not 1 <= n <= self.state['stage']:
-                raise Incomplete('到達済みのステージ番号を指定してください。')
+            if type(n) is not int or not 1 <= n <= 10 or not self.db.execute('SELECT 1 FROM snapshots WHERE stage=?', (n,)).fetchone():
+                raise Incomplete('到達済みの保存地点番号を指定してください。mission status で現在の番号を確認できます。')
             replay = self.private / 'replay-request.json'
             tmp = self.private / 'replay-request.tmp'
             tmp.write_text(json.dumps({'stage': n}))
             os.replace(tmp, replay)
-            return f'S{n} の練習を予約しました。exit でシェルを終了すると、Windowsの起動処理が独立した練習環境を開きます。'
+            return f'保存地点 {n} の練習を予約しました。exit 後に独立した練習環境を開きます。'
         if op == 'submit':
             if self.state['submitted']:
                 return c.COMPLETE
-            self.require(10)
-            if self.state['cleared'] != list(range(1, 10)) or not self.state['core']:
-                raise Incomplete('S9までの完了と core の認証が必要です。')
-            self.validate_submission(final=True)
-            self.state['submitted'] = True
-            self.state['cleared'].append(10)
-            self.save()
-            return c.COMPLETE + '\n\n' + self.status()
+            if not self.state['decoy'] or not self.state['core']:
+                raise Incomplete('移送命令の認証が必要です。')
+            self.validate_submission()
+            self.action('complete')
+            return c.COMPLETE
         raise Incomplete('不明な操作です。mission help を確認してください。')
 
     def handle(self, request):
@@ -410,11 +444,8 @@ class Engine:
             result = self.dispatch(request)
             return {'ok': True, 'result': result}
         except Incomplete as exc:
-            return {'ok': False, 'message': '[未完了] ' + str(exc)}
+            return {'ok': False, 'message': '[端末] ' + str(exc)}
         except (OSError, UnsafePath, UnicodeError, RecursionError) as exc:
-            detail = getattr(exc, 'filename', None)
-            if detail:
-                detail = str(detail)[:200]
-            else:
-                detail = str(exc)[:200]
-            return {'ok': False, 'message': '[環境エラー] ファイルの不足・権限・形式を確認してください。\n' + detail + '\nmission reset で復元できます。ホーム全体の破損は運営へ連絡してください。'}
+            detail = str(getattr(exc, 'filename', None) or exc)[:200]
+            return {'ok': False, 'message': '[環境エラー] ファイルの不足・権限・形式を確認してください。\n'
+                    + detail + '\nmission reset で復元できます。ホーム全体の破損は運営へ連絡してください。'}

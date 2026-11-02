@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nightfall-cli-game"
-version = "0.1.0"
-description = "Windows / Ubuntu WSL 2 向けUnix CLI学習ゲーム"
+version = "0.2.0"
+description = "NIGHTFALL：ノアの亡命 — Windows / Ubuntu WSL 2 向けUnix CLI調査ゲーム"
 requires-python = ">=3.12"
 dependencies = []
 

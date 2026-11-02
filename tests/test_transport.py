@@ -26,7 +26,7 @@ class TransportTest(unittest.TestCase):
         self.root.mkdir()
         self.private = self.base / 'private'
         game = Engine(self.root, self.private)
-        practice(game, 5)
+        practice(game, 3)
         game.close()
         self.socket = str(self.base / 'control.sock')
         self.process = subprocess.Popen([sys.executable, '-m', 'nightfall.daemon', '--root', str(self.root), '--private', str(self.private), '--socket', self.socket, '--user', pwd.getpwuid(os.getuid()).pw_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -55,12 +55,25 @@ class TransportTest(unittest.TestCase):
     def test_cli_status_and_bad_request_do_not_kill_manager(self):
         result = subprocess.run(self.cli('mission', 'status'), text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('4/10', result.stdout)
+        self.assertIn('保存地点: 3', result.stdout)
         self.assertFalse(request([], self.socket)['ok'])
         self.assertTrue(request({'op': 'current'}, self.socket)['ok'])
         self.assertTrue(request({'op': 'session-start'}, self.socket)['ok'])
         time.sleep(0.05)
         self.assertTrue(request({'op': 'session-stop'}, self.socket)['ok'])
+
+    def test_cli_record_fetch_permissions_and_payload(self):
+        result = subprocess.run(self.cli('mission', 'fetch', 'MAIL-0216'),
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('認証', result.stderr)
+        response = request({'op': 'unlock', 'area': 'archive', 'answer': 'cinder-47'}, self.socket)
+        self.assertTrue(response['ok'], response)
+        result = subprocess.run(self.cli('mission', 'fetch', 'MAIL-0216'),
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('/records/mail/0216.txt', result.stdout)
+        self.assertIn('旧ポンプ室', (self.root / 'srv/nightfall/records/mail/0216.txt').read_text())
 
     def test_password_prompt_uses_real_terminal_without_echo(self):
         master, slave = pty.openpty()
@@ -94,7 +107,7 @@ class TransportTest(unittest.TestCase):
             self.assertEqual(process.wait(timeout=5), 0, output.decode(errors='replace'))
             self.assertNotIn(b'cinder-47', output)
             self.assertIn('認証成功'.encode(), output)
-            self.assertIn('[S6/10', request({'op': 'current'}, self.socket)['result'])
+            self.assertIn('/srv/nightfall/vault', request({'op': 'current'}, self.socket)['result'])
         finally:
             os.close(master)
             if process.poll() is None:

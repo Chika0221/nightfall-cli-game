@@ -63,10 +63,14 @@ def mission():
     sub = parser.add_subparsers(dest='op')
     for name in ['check', 'hint', 'hints', 'help', 'status', 'reset', 'submit']:
         sub.add_parser(name)
+    fetch = sub.add_parser('fetch')
+    fetch.add_argument('ref')
     replay = sub.add_parser('replay')
     replay.add_argument('number', type=int)
     args = parser.parse_args()
     payload = {'op': args.op or 'current'}
+    if args.op == 'fetch':
+        payload['ref'] = args.ref
     if args.op == 'replay':
         payload['number'] = args.number
     return run(payload)
